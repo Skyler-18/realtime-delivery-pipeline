@@ -33,6 +33,18 @@ x-kafka-env: &kafka-env
   KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
   KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
 
+# Shared settings for our Python services (one image, different commands).
+x-app: &app
+  build: .
+  image: delivery-pipeline-app:latest
+  restart: unless-stopped # a crashed consumer restarts and resumes from its last committed offset
+  depends_on:
+    kafka-init: { condition: service_completed_successfully }
+
+x-app-env: &app-env
+  KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+  LOG_LEVEL: INFO
+
 services:
   kafka-1:
     <<: *kafka-common
@@ -92,3 +104,29 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local-3-broker
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+
+  # ------------------------------------------------------------ Python services
+  simulator:
+    <<: *app
+    container_name: simulator
+    command: ["python", "-m", "delivery_pipeline.simulator"]
+    environment:
+      <<: *app-env
+      SIM_NUM_DRIVERS: ${SIM_NUM_DRIVERS:-100}
+      SIM_ORDERS_PER_MINUTE: ${SIM_ORDERS_PER_MINUTE:-6}
+      SIM_MALFORMED_RATE: ${SIM_MALFORMED_RATE:-0.01}
+
+  alerts:
+    <<: *app
+    container_name: alerts
+    command: ["python", "-m", "delivery_pipeline.alerts"]
+    environment:
+      <<: *app-env
+
+  live-map:
+    <<: *app
+    container_name: live-map
+    command: ["python", "-m", "delivery_pipeline.live_map"]
+    ports: ["8000:8000"]
+    environment:
+      <<: *app-env

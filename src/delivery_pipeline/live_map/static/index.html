@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Delivery Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    :root { --bg:#f6f7f9; --panel:#fff; --text:#1f2328; --muted:#6b7280; --border:#e5e7eb;
+            --idle:#8a8f98; --pickup:#f59e0b; --dropoff:#16a34a; --alert:#dc2626; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--text); background:var(--bg);
+           display:grid; grid-template-columns: 1fr 340px; height:100vh; }
+    #map { height:100vh; }
+    aside { background:var(--panel); border-left:1px solid var(--border); display:flex; flex-direction:column; min-height:0; }
+    header { padding:16px; border-bottom:1px solid var(--border); }
+    h1 { font-size:16px; margin:0 0 4px; }
+    #conn { font-size:12px; color:var(--muted); }
+    #conn.ok::before { content:"● "; color:var(--dropoff); }
+    #conn.bad::before { content:"● "; color:var(--alert); }
+    .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:16px; border-bottom:1px solid var(--border); }
+    .stat { border:1px solid var(--border); border-radius:8px; padding:8px; }
+    .stat b { display:block; font-size:20px; font-variant-numeric: tabular-nums; }
+    .stat span { font-size:12px; color:var(--muted); }
+    .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; }
+    h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:16px 16px 8px; }
+    #alerts { list-style:none; margin:0; padding:0 16px 16px; overflow-y:auto; flex:1; }
+    #alerts li { border-left:3px solid var(--pickup); padding:6px 8px; margin-bottom:6px; background:var(--bg); border-radius:4px; }
+    #alerts li.high { border-left-color:var(--alert); }
+    #alerts .meta { font-size:11px; color:var(--muted); }
+    @media (max-width: 760px) { body { grid-template-columns:1fr; grid-template-rows: 60vh auto; } #map { height:60vh; } }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <aside>
+    <header>
+      <h1>Live delivery map</h1>
+      <div id="conn" class="bad">connecting…</div>
+    </header>
+    <div class="stats">
+      <div class="stat"><b id="n-idle">0</b><span><i class="dot" style="background:var(--idle)"></i>idle</span></div>
+      <div class="stat"><b id="n-pickup">0</b><span><i class="dot" style="background:var(--pickup)"></i>to pickup</span></div>
+      <div class="stat"><b id="n-dropoff">0</b><span><i class="dot" style="background:var(--dropoff)"></i>to dropoff</span></div>
+    </div>
+    <h2>Recent alerts</h2>
+    <ul id="alerts"></ul>
+  </aside>
+
+<script>
+const COLORS = { idle: "#8a8f98", to_pickup: "#f59e0b", to_dropoff: "#16a34a" };
+const MAX_ALERTS = 30;
+
+const map = L.map("map").setView([12.955, 77.63], 12);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+}).addTo(map);
+
+const drivers = new Map();   // id -> latest driver json
+const markers = new Map();   // id -> Leaflet marker
+
+function upsertDriver(d) {
+  drivers.set(d.id, d);
+  const style = { radius: 6, color: "#fff", weight: 1, fillColor: COLORS[d.status], fillOpacity: 0.95 };
+  let m = markers.get(d.id);
+  if (!m) {
+    m = L.circleMarker([d.lat, d.lon], style).addTo(map).bindTooltip("");
+    markers.set(d.id, m);
+  } else {
+    m.setLatLng([d.lat, d.lon]).setStyle(style);
+  }
+  m.setTooltipContent(`${d.id} · ${d.status} · ${d.speed} km/h${d.order_id ? " · " + d.order_id : ""}`);
+}
+
+function addAlert(a) {
+  const li = document.createElement("li");
+  li.className = a.severity;
+  const msg = document.createElement("div");
+  msg.textContent = a.message;
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = `${a.alert_type} · ${new Date(a.ts).toLocaleTimeString()}`;
+  li.append(msg, meta);
+  const list = document.getElementById("alerts");
+  list.prepend(li);
+  while (list.children.length > MAX_ALERTS) list.lastChild.remove();
+
+  if (a.lat != null && a.lon != null) {
+    const ring = L.circle([a.lat, a.lon], { radius: 150, color: "#dc2626", weight: 2, fill: false }).addTo(map);
+    setTimeout(() => ring.remove(), 60_000);
+  }
+}
+
+function renderStats() {
+  const counts = { idle: 0, to_pickup: 0, to_dropoff: 0 };
+  for (const d of drivers.values()) counts[d.status]++;
+  document.getElementById("n-idle").textContent = counts.idle;
+  document.getElementById("n-pickup").textContent = counts.to_pickup;
+  document.getElementById("n-dropoff").textContent = counts.to_dropoff;
+}
+
+function connect() {
+  const conn = document.getElementById("conn");
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onopen = () => { conn.textContent = "live"; conn.className = "ok"; };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "snapshot") {
+      document.getElementById("alerts").replaceChildren();
+      [...msg.alerts].reverse().forEach(addAlert);   // snapshot is newest-first
+    } else {
+      msg.alerts.forEach(addAlert);
+    }
+    msg.drivers.forEach(upsertDriver);
+    renderStats();
+  };
+  ws.onclose = () => {
+    conn.textContent = "disconnected, retrying…"; conn.className = "bad";
+    setTimeout(connect, 2000);
+  };
+}
+connect();
+</script>
+</body>
+</html>
