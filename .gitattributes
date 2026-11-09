@@ -1,0 +1,4 @@
+# Shell scripts run inside Linux containers: force LF even on Windows checkouts,
+# otherwise bash fails with "$'\r': command not found".
+*.sh text eol=lf
+* text=auto

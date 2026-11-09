@@ -1,0 +1,16 @@
+[project]
+name = "delivery-pipeline"
+version = "0.1.0"
+description = "Real-time delivery tracking and analytics platform: Kafka, FastAPI, Spark Structured Streaming, Delta Lake."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "confluent-kafka>=2.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/delivery_pipeline"]
